@@ -354,3 +354,294 @@ field(2; Description; Text[100])
     Caption = 'Equipment Description';
 }
 ```
+
+
+# Custom APIs in AL
+
+## API Page
+An API page is for software to interact with BC
+`Postman / External App → REST API → API Page → Table`
+Training Equipment
+        ↓
+Training Equipment API
+        ↓
+http://BCLocalDev:7048/BC/api/...
+
+### Create an API Page
+```AL
+page 50302 "Training Equipment API"
+{
+    PageType = API; ## This isn't a normal Web Client page. Expose this page as an API endpoint.
+    SourceTable = "Training Equipment"; #means the API operates on the records in our existing table.
+}
+### API identity
+```AL
+APIVersion = 'v1.0';
+APIPublisher = 'training';
+APIGroup = 'equipment';
+EntityName = 'trainingEquipment';
+EntitySetName = 'trainingEquipment';
+```
+
+page 50302 "Training Equipment API"
+{
+    PageType = API;
+
+    APIVersion = 'v1.0';
+    APIPublisher = 'training';
+    APIGroup = 'equipment';
+    EntityName = 'trainingEquipment';
+    EntitySetName = 'trainingEquipment';
+
+    SourceTable = "Training Equipment";
+    DelayedInsert=true
+}
+`DelayedInsert` waits until the record is actually ready to be committed before inserting it.
+| Property | Meaning |
+|---|---|
+| `APIVersion` | Version of our API |
+| `APIPublisher` | Namespace/owner of the API |
+| `APIGroup` | Groups related APIs |
+| `EntityName` | Name of one individual resource |
+| `EntitySetName` | Name used for the collection |
+
+used to construct the api endpoint
+`/api/training/equipment/v1.0/trainingEquipment`
+
+### API's fields - API Page — Exposing Fields
+exposing our table fields through the api.
+
+### API Layout
+API page, we use the layout section to define the fields exposed by the API.
+```json
+layout
+{
+    area(Content)
+    {
+        field(id; Rec."Equipment No.")
+        {
+        }
+
+        field(description; Rec.Description)
+        {
+        }
+
+        field(purchaseDate; Rec."Purchase Date")
+        {
+        }
+
+        field(isActive; Rec."Is Active")
+        {
+        }
+    }
+}
+```
+field(description; Rec.Description)
+      ↑                 ↑
+ API field name        BC table field
+API pages use API-friendly names, rather than necessarily exposing your internal BC field names verbatim.
+
+Ouput
+```{
+    "id": "EQ001",
+    "description": "Laptop",
+    ...
+}```
+
+### Calling our custom API
+Publisher = training
+Group     = equipment
+Version   = v1.0
+Entity    = trainingEquipment
+
+endpoint
+http://BCLocalDev:7048/BC/api/training/equipment/v1.0/trainingEquipment?tenant=default&company=CRONUS%20USA%2C%20Inc.
+
+Pass the tenant and company as postman params to keep url clean
+| Key | Value |
+|---|---|
+| `tenant` | `default` |
+| `company` | `CRONUS USA, Inc.` |
+http://BCLocalDev:7048/BC/api/training/equipment/v1.0/trainingEquipment
+
+http://BCLocalDev:7048
+        │
+        └── BC server/API service
+
+/BC
+ │
+ └── Server instance
+
+/api
+ │
+ └── Business Central API route
+
+/training
+ │
+ └── APIPublisher
+
+/equipment
+ │
+ └── APIGroup
+
+/v1.0
+ │
+ └── APIVersion
+
+/trainingEquipment
+ │
+ └── EntitySetName
+
+> conceptually
+SERVER
+  ↓
+SERVER INSTANCE
+  ↓
+API
+  ↓
+PUBLISHER
+  ↓
+GROUP
+  ↓
+VERSION
+  ↓
+ENTITY
+  ↓
+TENANT + COMPANY
+
+
+## OData
+Business Central's APIs are built around OData (Open Data Protocol).
+OData is the protocol/query model Business Central uses to expose and interact with data over HTTP.
+```json
+{
+    "@odata.context": "http://bclocaldev:7048/BC/api/training/equipment/v1.0/$metadata#trainingEquipment",
+    "value": [
+        {
+            "@odata.etag": "W/\"JzE5Ozk5OTMxMzU5NzUyNTY4Nzc3NTUxOzAwOyc=\"",
+            "id": "EQ-001",
+            "description": "Laptop",
+            "purchaseDate": "2027-02-02",
+            "isActive": true
+        },
+}
+```
+`"@odata.context": ".../$metadata#trainingEquipment"`
+and
+`"@odata.etag": "W/..."`
+
+the content and etag helps us use OData capabilities for things like filtering and selecting data.
+`...?company=CRONUS USA, Inc.&$filter=isActive eq true`
+
+
+
+
+# POST: Creating a BC Record
+
+
+# PATCH
+
+## SystemID
+Every BC record has a system-generated GUID called `SystemId`.
+Equipment No. → business identifier
+SystemId      → system identifier
+
+The business number can have meaning to users. SystemId is designed to uniquely identify the record at the system/API level.
+## OData ETag
+`http://BCLocalDev:7048/BC/api/training/equipment/v1.0/trainingEquipment('EQ-005')?tenant=default&company=CRONUS%20USA%2C%20Inc.`
+
+`"@odata.etag": "W/\"JzIwOz...\""`
+An ETag is essentially BC saying:
+"This is the current version of this record."
+You GET EQ-003
+        ↓
+You see the current record
+        ↓
+Someone else changes EQ-003
+        ↓
+You PATCH using an old version
+
+BC needs a way to know whether you're updating the version you actually read.
+
+Headers
+| Key | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `If-Match` | `*` |
+
+`If-Match *` tells BC - Update this record regardless of its current ETag.
+```json
+{
+    "@odata.context": "http://bclocaldev:7048/BC/api/training/equipment/v1.0/$metadata#trainingEquipment/$entity",
+    "@odata.etag": "W/\"JzIwOzE3ODMwODAxODc1MzU2MTQwODAzMTswMDsn\"",
+    "id": "EQ-005",
+    "description": "External Monitor",
+    "purchaseDate": "2026-12-08",
+    "isActive": true
+}
+```
+
+### Optimistic Concurrency
+The If-Match: * - says I don't care which version of the record currently exists; update it.
+but in production API we want Update a record only if it is still the version I originally read
+therefore `optimistic concurrency` used to enforce this
+GET EQ-003
+   ↓
+Receive ETag A
+   ↓
+Someone changes EQ-003
+   ↓
+EQ-003 now has ETag B
+   ↓
+PATCH using ETag A
+   ↓
+BC rejects the update
+
+preventing an application from accidentally overwriting somebody else's newer change.
+
+The relationship
+ETag
+  ↓
+represents the current version of the record
+
+If-Match
+  ↓
+tells the server which version you expect to update
+
+Instead of `If-Match : *` use `If-Match : W/\"JzI...` i.e the ETag returned by GET
+
+## API keys and SystemId
+the different ideas
+Equipment No.       → business identifier
+SystemId             → BC system identifier
+our table has `field(1; "Equipment No."; Code[20])` with `key(PK; "Equipment No.")`
+
+
+```field(id; Rec.SystemId)
+{
+}```
+
+instead of
+```json
+{
+            "@odata.etag": "W/\"JzE5OzU5MjA0MDkwMjA3OTYyODk4MDUxOzAwOyc=\"",
+            "id": "EQ-005",
+            "description": "Monitor",
+            "purchaseDate": "2026-12-08",
+            "isActive": true
+        }
+        ```
+using system id you get 
+``json
+ {
+            "@odata.etag": "W/\"JzE5OzgyNjg2MjAxODQ4NTkzNTM4OTUxOzAwOyc=\"",
+            "equipmentNo": "EQ-005",
+            "id": "ba80a5e0-4ac3-f111-9f3f-f4aed838a579",
+            "description": "External Monitor",
+            "purchaseDate": "2026-12-08",
+            "isActive": true
+        }
+
+```
+EQ-005 is meaningful to the business.
+SystemId is stable and designed for system-to-system identification.
